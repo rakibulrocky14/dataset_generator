@@ -1,0 +1,21 @@
+body { font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(120deg, #e0e7ff 0%, #f6f7fb 100%); margin: 0; }
+.container { max-width: 540px; margin: 40px auto; background: #fff; padding: 32px 38px; border-radius: 18px; box-shadow: 0 8px 32px #0002; }
+h1 { text-align: center; color: #23408e; letter-spacing: 1px; margin-bottom: 18px; }
+form label { display: block; margin-top: 18px; color: #333; font-weight: 500; }
+form input[type="text"], form input[type="number"] { width: 100%; padding: 10px; margin-top: 7px; border-radius: 6px; border: 1px solid #bfcfff; font-size: 15px; }
+button { margin-top: 22px; width: 100%; background: linear-gradient(90deg, #23408e 60%, #3c8dbc 100%); color: #fff; padding: 12px; border: none; border-radius: 7px; font-size: 17px; font-weight: 500; cursor: pointer; transition: background 0.2s; }
+button:hover { background: linear-gradient(90deg, #3c8dbc 60%, #23408e 100%); }
+#progress-area { margin-top: 32px; }
+.progress-bar-bg { width: 100%; height: 22px; background: #e1e7f7; border-radius: 8px; margin-top: 8px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #3c8dbc 40%, #28a745 100%); width: 0%; transition: width 0.5s; border-radius: 8px; }
+#progress-text { display: block; margin-top: 12px; font-weight: 600; color: #23408e; }
+#download-buttons { margin-top: 18px; display: flex; gap: 10px; }
+#download-csv-btn { flex: 1; background: linear-gradient(90deg, #28a745 60%, #3c8dbc 100%); }
+#download-csv-btn:hover { background: linear-gradient(90deg, #3c8dbc 60%, #28a745 100%); }
+#download-json-btn { flex: 1; background: linear-gradient(90deg, #ff9500 60%, #ff6b35 100%); }
+#download-json-btn:hover { background: linear-gradient(90deg, #ff6b35 60%, #ff9500 100%); }
+#error-message { color: #fff; background: #e74c3c; border-radius: 6px; padding: 10px 14px; margin-top: 18px; font-weight: 500; display: none; }
+#csv-preview { margin-top: 24px; border-collapse: collapse; width: 100%; background: #f9fafd; border-radius: 8px; overflow: hidden; }
+#csv-preview th, #csv-preview td { border: 1px solid #d1d5db; padding: 7px 10px; text-align: left; }
+#csv-preview th { background: #e1e7f7; color: #23408e; }
+#csv-preview tr:nth-child(even) { background: #f1f5fb; }
