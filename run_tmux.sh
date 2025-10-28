@@ -55,15 +55,36 @@ if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     exit 0
 fi
 
-# Check if virtual environment exists
-if [ -d "venv" ]; then
-    PYTHON="venv/bin/python"
-    echo "Using virtual environment"
-else
-    PYTHON="python3"
-    echo "Warning: Virtual environment not found. Using system Python."
-    echo "Run ./setup_venv.sh first for best results."
+# Check if virtual environment exists, if not create it
+if [ ! -d "venv" ]; then
+    echo "Virtual environment not found. Setting up automatically..."
+    
+    # Check if python3-venv is installed
+    if ! dpkg -l | grep -q python3-venv 2>/dev/null; then
+        echo "Installing python3-venv..."
+        sudo apt update && sudo apt install -y python3-venv python3-full python3-pip
+    fi
+    
+    # Create venv
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+    
+    # Install dependencies
+    echo "Installing dependencies..."
+    venv/bin/pip install --upgrade pip setuptools wheel
+    venv/bin/pip install google-generativeai python-dotenv
+    
+    echo "✓ Setup complete!"
 fi
+
+# Verify dependencies are installed
+if ! venv/bin/python -c "import google.generativeai" 2>/dev/null; then
+    echo "Installing missing dependencies..."
+    venv/bin/pip install google-generativeai python-dotenv
+fi
+
+PYTHON="venv/bin/python"
+echo "Using virtual environment"
 
 # Build command with all arguments passed to this script
 # Use array to properly handle arguments with spaces
