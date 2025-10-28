@@ -55,8 +55,18 @@ if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     exit 0
 fi
 
+# Check if virtual environment exists
+if [ -d "venv" ]; then
+    PYTHON="venv/bin/python"
+    echo "Using virtual environment"
+else
+    PYTHON="python3"
+    echo "Warning: Virtual environment not found. Using system Python."
+    echo "Run ./setup_venv.sh first for best results."
+fi
+
 # Build command with all arguments passed to this script
-CMD="python3 gemini_cli.py $@"
+CMD="$PYTHON gemini_cli.py $@"
 
 # Create new tmux session and run the generator
 echo "Creating tmux session: $SESSION_NAME"
