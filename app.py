@@ -30,33 +30,102 @@ generation_running = False
 lock = threading.Lock()
 
 
+def validate_row_quality(row, columns, description=""):
+    """Validate that row meets quality standards"""
+    if not row or len(row) != len(columns):
+        return False
+    
+    for cell in row:
+        # Check if cell is empty or too short
+        if not cell or len(cell.strip()) < 10:
+            return False
+        
+        # Check if cell looks like placeholder text
+        if cell.lower() in ['value1', 'value2', 'value3', 'value4', 'example', 'n/a', 'null']:
+            return False
+        
+        # If description mentions "4 sentences" or "multiple sentences", validate minimum length
+        if "4 sentence" in description.lower() or "multiple sentence" in description.lower():
+            # Each cell should have at least 50 characters for multi-sentence content
+            if len(cell.strip()) < 50:
+                return False
+            # Should have at least 2 periods (indicating multiple sentences)
+            if cell.count('.') < 2:
+                return False
+    
+    return True
+
+
 def generate_with_llm(prompt, columns, batch_size):
-    # Calls LLM API (OpenAI-compatible) to generate CSV rows
+    # Calls LLM API (OpenAI-compatible) to generate data as JSON
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful assistant that generates CSV data. Output only valid CSV format with no additional explanation.",
+                "content": "You are a precise dataset generator. Follow the user's description EXACTLY. Output ONLY a valid JSON array of objects, no explanations. Each object represents one complete dataset entry. Ensure the JSON is complete and valid.",
             },
             {"role": "user", "content": prompt},
         ],
         temperature=0.7,
-        max_tokens=4000,
+        max_tokens=16000,
     )
-    # Parse CSV rows from response
-    csv_text = response.choices[0].message.content.strip()
-    rows = []
-    for line in csv_text.splitlines():
-        if not line.strip():
-            continue
-        # skip header if present
-        if any(col.lower() in line.lower() for col in columns):
-            continue
-        parts = [x.strip(' "') for x in line.split(",")]
-        if len(parts) == len(columns):
-            rows.append(parts)
-    return rows
+    
+    # Parse JSON response
+    import json
+    import re
+    response_text = response.choices[0].message.content.strip()
+    
+    # Remove markdown code blocks if present
+    if response_text.startswith("```"):
+        lines = response_text.split('\n')
+        response_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else response_text
+    
+    # Try to extract JSON array if there's extra text
+    json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
+    if json_match:
+        response_text = json_match.group(0)
+    
+    try:
+        data = json.loads(response_text)
+        if not isinstance(data, list):
+            print("[LLM ERROR] Response is not a JSON array")
+            return []
+        
+        rows = []
+        for item in data:
+            if isinstance(item, dict):
+                # Extract values in column order
+                row = [str(item.get(col, "")).strip() for col in columns]
+                # Only accept rows with correct number of non-empty columns
+                if len(row) == len(columns) and all(cell for cell in row):
+                    rows.append(row)
+        
+        print(f"[LLM] Successfully parsed {len(rows)} valid rows from JSON")
+        return rows
+    except json.JSONDecodeError as e:
+        print(f"[LLM ERROR] Failed to parse JSON: {e}")
+        print(f"[LLM ERROR] Response text (first 500 chars): {response_text[:500]}")
+        # Try to salvage partial data by fixing common issues
+        try:
+            # Try to fix truncated JSON by closing it
+            if not response_text.endswith(']'):
+                # Find last complete object
+                last_brace = response_text.rfind('}')
+                if last_brace > 0:
+                    response_text = response_text[:last_brace+1] + ']'
+                    data = json.loads(response_text)
+                    rows = []
+                    for item in data:
+                        if isinstance(item, dict):
+                            row = [str(item.get(col, "")).strip() for col in columns]
+                            if len(row) == len(columns) and all(cell for cell in row):
+                                rows.append(row)
+                    print(f"[LLM] Recovered {len(rows)} rows from truncated JSON")
+                    return rows
+        except:
+            pass
+        return []
 
 
 @app.route("/generate", methods=["POST"])
@@ -94,11 +163,26 @@ def generate_dataset():
         while generated < total_rows:
             # Request up to 2x the remaining rows, capped at 100
             curr_batch = min(max(batch_size, 2 * (total_rows - generated)), 100)
-            prompt = (
-                f"{description}. Generate {curr_batch} unique rows as CSV with columns: {', '.join(columns)}. "
-                f"Output ONLY valid CSV with a header row and no explanation. Do not repeat any row or the header row. "
-                f"Example:\n{', '.join(columns)}\nvalue1,value2\nvalue3,value4"
-            )
+            
+            # Build a stronger, more specific prompt  
+            # Limit batch size to avoid truncation but keep it reasonable
+            curr_batch = min(curr_batch, 50)
+            
+            prompt = f"""Task: {description}
+
+Generate EXACTLY {curr_batch} entries following the description EXACTLY.
+
+Output format: Valid JSON array of objects with these exact keys: {', '.join(columns)}
+
+CRITICAL: Output ONLY the JSON array, nothing else. Ensure the JSON is complete and valid.
+
+Example:
+[
+  {{"{columns[0]}": "content here", "{columns[1]}": "content here"}},
+  {{"{columns[0]}": "different content", "{columns[1]}": "different content"}}
+]
+
+Generate {curr_batch} unique entries:"""
             try:
                 rows = generate_with_llm(prompt, columns, curr_batch)
                 print(f"[LLM] Generated {len(rows)} rows from API call")
@@ -118,10 +202,15 @@ def generate_dataset():
                     break
             else:
                 empty_batches = 0
-                # Deduplicate rows
+                # Deduplicate and validate rows
                 new_rows = []
                 with lock:
                     for row in rows:
+                        # Validate row quality first
+                        if not validate_row_quality(row, columns, description):
+                            print(f"[LLM WARNING] Skipping low-quality row: {row[:50] if row else row}...")
+                            continue
+                        
                         trow = tuple(row)
                         if trow not in seen:
                             seen.add(trow)
@@ -130,6 +219,7 @@ def generate_dataset():
                     to_add = new_rows[:needed]
                     generated_data.extend(to_add)
                     generated = len(generated_data)
+                    print(f"[LLM] Added {len(to_add)} valid rows. Total: {generated}/{total_rows}")
         with lock:
             global generation_running
             generation_running = False
@@ -196,14 +286,16 @@ def download_json():
     # Convert to list of dictionaries
     json_data = []
     for row in rows:
-        row_dict = {columns[i]: row[i] for i in range(len(columns))}
-        json_data.append(row_dict)
+        # Only process rows with correct column count
+        if len(row) == len(columns):
+            row_dict = {columns[i]: row[i] for i in range(len(columns))}
+            json_data.append(row_dict)
 
     import json
-    json_string = json.dumps(json_data, indent=2)
+    json_string = json.dumps(json_data, indent=2, ensure_ascii=False)
 
     return send_file(
-        io.BytesIO(json_string.encode()),
+        io.BytesIO(json_string.encode('utf-8')),
         mimetype="application/json",
         as_attachment=True,
         download_name="dataset.json",

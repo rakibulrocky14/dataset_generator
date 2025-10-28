@@ -71,11 +71,19 @@ form.addEventListener("submit", async function (e) {
     }
     // Show API call count
     showApiCallCount(data.api_calls);
+    
+    // Check if generation is complete or stopped
     if (data.generated >= data.total && data.total > 0) {
       finished = true;
       progressText.innerText = `Done! ${data.generated} rows generated.`;
       downloadButtons.style.display = "block";
+    } else if (!data.running && data.generated > 0) {
+      // Generation stopped but we have some data
+      finished = true;
+      progressText.innerText = `Generation stopped. ${data.generated} rows available.`;
+      downloadButtons.style.display = "block";
     }
+    
     await new Promise((r) => setTimeout(r, 1200));
   }
 });
@@ -122,13 +130,46 @@ function showWarning(msg) {
   }
 }
 
+function parseCSVLine(line) {
+  // Proper CSV parser that handles quoted fields with commas
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    const nextChar = line[i + 1];
+    
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        // Escaped quote
+        current += '"';
+        i++;
+      } else {
+        // Toggle quote state
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      // Field separator
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  // Add last field
+  result.push(current.trim());
+  return result;
+}
+
 async function getLiveCsvRows() {
   // Fetch the full CSV (live) from the backend
   try {
     const res = await fetch("/csv_live");
     const text = await res.text();
     const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
-    return lines.map((line) => line.split(","));
+    return lines.map((line) => parseCSVLine(line));
   } catch {
     return [];
   }
@@ -151,21 +192,34 @@ function showPreview(columns, rows) {
   csvPreviewArea.style.display = "block";
   csvPreview.innerHTML = "";
   if (!rows.length) return;
+  
+  // Use the header row from CSV
   const thead = document.createElement("thead");
   const tr = document.createElement("tr");
-  rows[0].forEach((col) => {
+  const headerRow = rows[0];
+  
+  headerRow.forEach((col) => {
     const th = document.createElement("th");
-    th.innerText = col;
+    th.innerText = col.replace(/^["']|["']$/g, '');
     tr.appendChild(th);
   });
   thead.appendChild(tr);
   csvPreview.appendChild(thead);
+  
   const tbody = document.createElement("tbody");
-  for (let i = 1; i < rows.length; i++) {
+  const expectedColCount = headerRow.length;
+  
+  for (let i = 1; i < rows.length && i <= 10; i++) {
+    // Only show rows with correct column count
+    if (rows[i].length !== expectedColCount) {
+      console.warn(`Skipping row ${i} - has ${rows[i].length} columns, expected ${expectedColCount}`);
+      continue;
+    }
+    
     const tr = document.createElement("tr");
     rows[i].forEach((cell) => {
       const td = document.createElement("td");
-      td.innerText = cell;
+      td.innerText = cell.replace(/^["']|["']$/g, '');
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
