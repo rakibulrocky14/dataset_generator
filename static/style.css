@@ -19,3 +19,8 @@ button:hover { background: linear-gradient(90deg, #3c8dbc 60%, #23408e 100%); }
 #csv-preview th, #csv-preview td { border: 1px solid #d1d5db; padding: 7px 10px; text-align: left; }
 #csv-preview th { background: #e1e7f7; color: #23408e; }
 #csv-preview tr:nth-child(even) { background: #f1f5fb; }
+#stream-area { margin-top: 24px; scroll-margin-top: 20px; }
+#stream-content { margin-top: 12px; }
+#csv-preview-area { margin-top: 24px; max-height: 600px; overflow-y: auto; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; background: #f9fafd; scroll-behavior: smooth; }
+#csv-preview tbody tr { transition: background-color 0.2s ease; }
+#csv-preview tbody tr:hover { background-color: #e3f2fd !important; }

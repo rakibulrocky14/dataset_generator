@@ -4,24 +4,21 @@ import io
 import threading
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+import google.generativeai as genai
+import json
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 
 load_dotenv()
-API_KEY = os.getenv("API_KEY")
-BASE_URL = os.getenv("BASE_URL")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 
 # Validate API key
-if not API_KEY or API_KEY == "your_api_key_here":
-    raise ValueError("ERROR: API_KEY is not set or is using the default placeholder. Please set a valid API key in your .env file.")
+if not GEMINI_API_KEY or GEMINI_API_KEY == "your_api_key_here":
+    raise ValueError("ERROR: GEMINI_API_KEY is not set. Please set it in your .env file.")
 
-# Initialize OpenAI client
-try:
-    client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-except Exception as e:
-    raise ValueError(f"ERROR: Failed to initialize OpenAI client: {e}")
+# Configure Gemini
+genai.configure(api_key=GEMINI_API_KEY)
 
 generated_data = []
 dataset_meta = {}
@@ -47,40 +44,55 @@ def validate_row_quality(row, columns, description=""):
     return True
 
 
-def generate_with_llm(prompt, columns, batch_size):
-    # Calls LLM API (OpenAI-compatible) to generate data as JSON
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a precise dataset generator. Follow the user's description EXACTLY. Output ONLY a valid JSON array of objects, no explanations. Each object represents one complete dataset entry. Ensure the JSON is complete and valid.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=1,
-        max_tokens=64000,
-    )
-    
-    # Parse JSON response
-    import json
-    import re
-    response_text = response.choices[0].message.content.strip()
-    
-    # Remove markdown code blocks if present
-    if response_text.startswith("```"):
-        lines = response_text.split('\n')
-        response_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else response_text
-    
-    # Try to extract JSON array if there's extra text
-    json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-    if json_match:
-        response_text = json_match.group(0)
-    
+streaming_content = []
+
+def generate_with_gemini(prompt, columns, batch_size):
+    """Generate data using Gemini's streaming JSON mode"""
+    global streaming_content
     try:
+        # Create model with JSON response format
+        model = genai.GenerativeModel(
+            model_name=MODEL_NAME,
+            generation_config={
+                "temperature": 1,
+                "max_output_tokens": 32000,
+                "response_mime_type": "application/json",
+            }
+        )
+        
+        # Use streaming to show progress
+        response_text = ""
+        with lock:
+            streaming_content.append({"status": "generating", "text": ""})
+            stream_index = len(streaming_content) - 1
+        
+        response = model.generate_content(prompt, stream=True)
+        
+        import time
+        chunk_count = 0
+        for chunk in response:
+            if chunk.text:
+                response_text += chunk.text
+                chunk_count += 1
+                with lock:
+                    streaming_content[stream_index]["text"] = response_text
+                print(f"[GEMINI STREAM] Chunk {chunk_count}, length: {len(response_text)}")
+                # Small delay every few chunks to make streaming visible
+                if chunk_count % 3 == 0:
+                    time.sleep(0.05)
+        
+        with lock:
+            streaming_content[stream_index]["status"] = "complete"
+        
+        # Parse JSON response (Gemini guarantees valid JSON with response_mime_type)
         data = json.loads(response_text)
+        
+        # Handle both array and object with "data" key
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
+        
         if not isinstance(data, list):
-            print("[LLM ERROR] Response is not a JSON array")
+            print("[GEMINI ERROR] Response is not a JSON array")
             return []
         
         rows = []
@@ -92,30 +104,17 @@ def generate_with_llm(prompt, columns, batch_size):
                 if len(row) == len(columns) and all(cell for cell in row):
                     rows.append(row)
         
-        print(f"[LLM] Successfully parsed {len(rows)} valid rows from JSON")
+        print(f"[GEMINI] Successfully parsed {len(rows)} valid rows from JSON")
         return rows
+        
     except json.JSONDecodeError as e:
-        print(f"[LLM ERROR] Failed to parse JSON: {e}")
-        print(f"[LLM ERROR] Response text (first 500 chars): {response_text[:500]}")
-        # Try to salvage partial data by fixing common issues
-        try:
-            # Try to fix truncated JSON by closing it
-            if not response_text.endswith(']'):
-                # Find last complete object
-                last_brace = response_text.rfind('}')
-                if last_brace > 0:
-                    response_text = response_text[:last_brace+1] + ']'
-                    data = json.loads(response_text)
-                    rows = []
-                    for item in data:
-                        if isinstance(item, dict):
-                            row = [str(item.get(col, "")).strip() for col in columns]
-                            if len(row) == len(columns) and all(cell for cell in row):
-                                rows.append(row)
-                    print(f"[LLM] Recovered {len(rows)} rows from truncated JSON")
-                    return rows
-        except:
-            pass
+        print(f"[GEMINI ERROR] Failed to parse JSON: {e}")
+        print(f"[GEMINI ERROR] Response text: {response_text[:500] if response_text else 'empty'}")
+        return []
+    except Exception as e:
+        print(f"[GEMINI ERROR] API call failed: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
@@ -131,9 +130,10 @@ def generate_dataset():
     except Exception as e:
         return jsonify({"status": "error", "message": f"Invalid request data: {e}"}), 400
 
-    global api_call_count, generation_running
+    global api_call_count, generation_running, streaming_content
     with lock:
         generated_data = []
+        streaming_content = []
         dataset_meta = {
             "columns": columns,
             "description": description,
@@ -154,42 +154,39 @@ def generate_dataset():
         while generated < total_rows:
             # Request up to 2x the remaining rows, capped at 100
             curr_batch = min(max(batch_size, 2 * (total_rows - generated)), 100)
-            
-            # Build a stronger, more specific prompt  
-            # Limit batch size to avoid truncation but keep it reasonable
-            curr_batch = min(curr_batch, 100)
+            curr_batch = min(curr_batch, 1000)
             
             prompt = f"""Task: {description}
 
 Generate EXACTLY {curr_batch} entries following the description EXACTLY.
 
-Output format: Valid JSON array of objects with these exact keys: {', '.join(columns)}
+Output a JSON array of objects with these exact keys: {', '.join(columns)}
 
-CRITICAL: Output ONLY the JSON array, nothing else. Ensure the JSON is complete and valid.
-
-Example:
+Example format:
 [
   {{"{columns[0]}": "content here", "{columns[1]}": "content here"}},
   {{"{columns[0]}": "different content", "{columns[1]}": "different content"}}
 ]
 
-Generate {curr_batch} unique entries:"""
+Generate {curr_batch} unique, diverse entries now."""
+            
             try:
-                rows = generate_with_llm(prompt, columns, curr_batch)
-                print(f"[LLM] Generated {len(rows)} rows from API call")
+                rows = generate_with_gemini(prompt, columns, curr_batch)
+                print(f"[GEMINI] Generated {len(rows)} rows from API call")
                 with lock:
                     global api_call_count
                     api_call_count += 1
             except Exception as e:
-                print(f"[LLM ERROR] API call failed: {str(e)}")
+                print(f"[GEMINI ERROR] API call failed: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 rows = []
+            
             if not rows:
                 empty_batches += 1
-                print(f"[LLM WARNING] Empty batch {empty_batches}/{max_empty_batches}")
+                print(f"[GEMINI WARNING] Empty batch {empty_batches}/{max_empty_batches}")
                 if empty_batches >= max_empty_batches:
-                    print("[LLM ERROR] Too many empty batches. Stopping generation.")
+                    print("[GEMINI ERROR] Too many empty batches. Stopping generation.")
                     break
             else:
                 empty_batches = 0
@@ -199,7 +196,6 @@ Generate {curr_batch} unique entries:"""
                     for row in rows:
                         # Validate row quality first
                         if not validate_row_quality(row, columns, description):
-                            print(f"[LLM WARNING] Skipping low-quality row: {row[:50] if row else row}...")
                             continue
                         
                         trow = tuple(row)
@@ -210,7 +206,8 @@ Generate {curr_batch} unique entries:"""
                     to_add = new_rows[:needed]
                     generated_data.extend(to_add)
                     generated = len(generated_data)
-                    print(f"[LLM] Added {len(to_add)} valid rows. Total: {generated}/{total_rows}")
+                    print(f"[GEMINI] Added {len(to_add)} valid rows. Total: {generated}/{total_rows}")
+        
         with lock:
             global generation_running
             generation_running = False
@@ -230,13 +227,15 @@ def get_progress():
         error = None
         warning = None
         running = generation_running
+        stream_data = streaming_content.copy() if streaming_content else []
+        
         if total > 0 and count < total:
             if count == 0:
                 if not running:
-                    error = "LLM did not return any valid data. Please check your prompt or try again."
+                    error = "Gemini did not return any valid data. Please check your prompt or try again."
             else:
                 if not running:
-                    warning = f"LLM could not generate the full requested dataset. Generated {count} out of {total} rows. You can still download the partial CSV."
+                    warning = f"Gemini could not generate the full requested dataset. Generated {count} out of {total} rows. You can still download the partial CSV."
     return jsonify(
         {
             "generated": count,
@@ -246,6 +245,7 @@ def get_progress():
             "error": error,
             "warning": warning,
             "running": running,
+            "stream": stream_data,
         }
     )
 
@@ -282,7 +282,6 @@ def download_json():
             row_dict = {columns[i]: row[i] for i in range(len(columns))}
             json_data.append(row_dict)
 
-    import json
     json_string = json.dumps(json_data, indent=2, ensure_ascii=False)
 
     return send_file(
@@ -313,4 +312,5 @@ def index():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5001)
+
