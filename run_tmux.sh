@@ -66,6 +66,8 @@ else
 fi
 
 # Build command with all arguments passed to this script
+# Use array to properly handle arguments with spaces
+CMD_ARRAY=("$PYTHON" "gemini_cli.py" "$@")
 CMD="$PYTHON gemini_cli.py $@"
 
 # Create new tmux session and run the generator
@@ -79,7 +81,8 @@ echo "To reattach: tmux attach -t $SESSION_NAME"
 echo ""
 
 # Start tmux session in detached mode and run the generator
-tmux new-session -d -s $SESSION_NAME "$CMD; echo ''; echo 'Generation complete. Press Enter to exit.'; read"
+# Use proper quoting to handle arguments with spaces
+tmux new-session -d -s $SESSION_NAME "cd '$PWD' && $PYTHON gemini_cli.py $(printf '%q ' "$@"); echo ''; echo 'Generation complete. Press Enter to exit.'; read"
 
 echo "✓ Session created successfully!"
 echo ""

@@ -1,0 +1,7 @@
+{
+  "description": "This is a dataset of paraphrasing sentences like given a 4 sentence and paraphrasing it to make it better. The each Sentence column should contain only 4 sentences not more not less and the paraphrased column should contain max 5 sentences and all should be from CNN and daily mail about news only but don't write 'cnn' or 'dailymail' in the end",
+  "columns": ["Sentences", "Paraphrased"],
+  "rows": 10000,
+  "batch_size": 100,
+  "output": "dataset1.csv"
+}
